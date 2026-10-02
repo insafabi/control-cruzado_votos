@@ -11,8 +11,8 @@ st.set_page_config(
 
 st.title("🗳️ Centro de Control Rápido y Mensajería Electoral")
 st.markdown(
-    "Sistema optimizado para tu planilla: Control en tiempo real, semáforo y"
-    " pantalla de corrección y auditoría individual."
+    "Sistema optimizado para tu planilla masiva: Control en tiempo real,"
+    " semáforo y pantalla de corrección y auditoría individual."
 )
 
 # 1. Subir archivo Excel
@@ -22,31 +22,31 @@ uploaded_file = st.file_uploader(
 
 if uploaded_file is not None:
 
+  # Inicializar el estado de los datos y sesión de forma segura
+  if (
+      "file_name" not in st.session_state
+      or st.session_state.file_name != uploaded_file.name
+  ):
+    df_raw = pd.read_excel(uploaded_file)
+    df_raw.columns = df_raw.columns.str.strip()
 
-  @st.cache_data
-  def load_data(file):
-    df = pd.read_excel(file)
-    df.columns = df.columns.str.strip()
-
-    doc_col = next(
-        (c for c in df.columns if "documento" in c.lower() or "cedula" in c.lower()),
+    doc_col_temp = next(
+        (
+            c
+            for c in df_raw.columns
+            if "documento" in c.lower() or "cedula" in c.lower()
+        ),
         None,
     )
-    if doc_col:
-      df[doc_col] = df[doc_col].astype(str).str.replace(".0", "", regex=False)
+    if doc_col_temp:
+      df_raw[doc_col_temp] = (
+          df_raw[doc_col_temp].astype(str).str.replace(".0", "", regex=False)
+      )
 
-    return df
-
-
-  df_original = load_data(uploaded_file)
-
-  # Inicializar el estado de los votos en session_state con tipos seguros
-  if "df_estado" not in st.session_state:
-    df_estado = df_original.copy()
-    if "Estado_Voto" not in df_estado.columns:
-      if "VOTO" in df_estado.columns:
-        df_estado["Estado_Voto"] = (
-            df_estado["VOTO"]
+    if "Estado_Voto" not in df_raw.columns:
+      if "VOTO" in df_raw.columns:
+        df_raw["Estado_Voto"] = (
+            df_raw["VOTO"]
             .apply(
                 lambda x: True
                 if str(x).strip().upper() in ["S", "SI", "1", "TRUE", "X"]
@@ -55,14 +55,15 @@ if uploaded_file is not None:
             .astype(bool)
         )
       else:
-        df_estado["Estado_Voto"] = False
+        df_raw["Estado_Voto"] = False
     else:
-      df_estado["Estado_Voto"] = df_estado["Estado_Voto"].astype(bool)
+      df_raw["Estado_Voto"] = df_raw["Estado_Voto"].astype(bool)
 
-    if "VOTO" in df_estado.columns:
-      df_estado["VOTO"] = df_estado["VOTO"].astype(object)
+    if "VOTO" in df_raw.columns:
+      df_raw["VOTO"] = df_raw["VOTO"].astype(object)
 
-    st.session_state.df_estado = df_estado
+    st.session_state.df_estado = df_raw
+    st.session_state.file_name = uploaded_file.name
 
   df = st.session_state.df_estado
 
@@ -117,14 +118,14 @@ if uploaded_file is not None:
           "⚠️ **Zona de Peligro:** Si necesitas reiniciar absolutamente"
           " **todos** los votos y empezar desde cero:"
       )
-      confirmar_reset = st.checkbox("Confirmar reseteo total")
+      confirmar_reset = st.checkbox(
+          "Confirmar reseteo total", key="chk_reset_seguro"
+      )
       if st.button("🔄 Reiniciar Todos los Votos", type="primary"):
         if confirmar_reset:
-          df_reset = df_original.copy()
-          df_reset["Estado_Voto"] = False
-          if "VOTO" in df_reset.columns:
-            df_reset["VOTO"] = ""
-          st.session_state.df_estado = df_reset
+          st.session_state.df_estado["Estado_Voto"] = False
+          if "VOTO" in st.session_state.df_estado.columns:
+            st.session_state.df_estado["VOTO"] = ""
           st.success("¡Se han borrado todos los votos registrados!")
           st.rerun()
         else:
@@ -154,7 +155,9 @@ if uploaded_file is not None:
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Padrón Total", f"{total_padron:,}")
-    col2.metric("Ya Votaron (General)", f"{total_votaron:,}", delta=f"{porcentaje:.1f}%")
+    col2.metric(
+        "Ya Votaron (General)", f"{total_votaron:,}", delta=f"{porcentaje:.1f}%"
+    )
     col3.metric("Faltantes", f"{faltantes:,}")
     col4.metric("Participación General", f"{porcentaje:.1f}%")
 
@@ -181,7 +184,8 @@ if uploaded_file is not None:
       busqueda = st.text_input(
           "Ingrese el número de Documento / Cédula:",
           placeholder="Ej: 4610728",
-          key="input_cedula",
+          key="busqueda_cedula_t1",
+          autocomplete="off",
       )
 
       if busqueda:
@@ -228,7 +232,7 @@ if uploaded_file is not None:
                 if not estado_actual:
                   if st.button(
                       "✅ Marcar Como Votó",
-                      key=f"btn_voto_{idx}",
+                      key=f"btn_voto_t1_{idx}",
                       type="primary",
                   ):
                     st.session_state.df_estado.loc[idx, "Estado_Voto"] = True
@@ -237,7 +241,7 @@ if uploaded_file is not None:
                     st.rerun()
                 else:
                   if st.button(
-                      "↩️ Desmarcar (Error)", key=f"btn_desvoto_{idx}"
+                      "↩️ Desmarcar (Error)", key=f"btn_desvoto_t1_{idx}"
                   ):
                     st.session_state.df_estado.loc[idx, "Estado_Voto"] = False
                     if "VOTO" in st.session_state.df_estado.columns:
@@ -250,6 +254,7 @@ if uploaded_file is not None:
       corte_seleccionado = st.selectbox(
           "Seleccionar Corte Horario:",
           ["09:00 AM", "11:00 AM", "13:00 PM", "14:00 PM", "15:00 PM", "16:00 PM"],
+          key="corte_horario_sel",
       )
 
       if dirigente_col:
@@ -257,7 +262,9 @@ if uploaded_file is not None:
             df[dirigente_col].dropna().unique()
         )
         dirigente_filtro = st.selectbox(
-            "Filtrar por Dirigente para este corte", dirigentes_lista
+            "Filtrar por Dirigente para este corte",
+            dirigentes_lista,
+            key="dirigente_filtro_corte",
         )
       else:
         dirigente_filtro = "Todos los Dirigentes"
@@ -270,21 +277,47 @@ if uploaded_file is not None:
 
       st.info(
           f"📊 Electores pendientes para el corte de las {corte_seleccionado}:"
-          f" **{len(df_pendientes)} personas**"
+          f" **{len(df_pendientes):,} personas**"
       )
 
-      # Configuración de tu número personal para enlaces directos si no hay teléfono del votante
       mi_numero_contacto = st.text_input(
           "Tu número de celular (para recibir/coordinar avisos en WhatsApp si"
           " el elector no tiene número cargado):",
           value="595981000000",
+          key="mi_numero_wpp_input",
+          autocomplete="off",
       )
 
       if len(df_pendientes) > 0:
-        st.markdown("### Listado de Electores Pendientes y Acciones:")
+        st.markdown(
+            "### 🔎 Búsqueda Rápida de Pendientes (Optimizado para evitar"
+            " bloqueos)"
+        )
+        busq_pend = st.text_input(
+            "Escribe el nombre o cédula de un pendiente específico para enviarle"
+            " mensaje:",
+            placeholder="Ej: Juan o Cédula",
+            key="busq_pendientes_input",
+        )
+
+        if busq_pend:
+          df_filtrado_wpp = df_pendientes[
+              df_pendientes.astype(str)
+              .apply(
+                  lambda x: x.str.contains(busq_pend, case=False, na=False)
+              )
+              .any(axis=1)
+          ]
+        else:
+          df_filtrado_wpp = df_pendientes.head(50)
+          st.caption(
+              "Mostrando los primeros 50 electores pendientes. Utiliza el"
+              " buscador superior si buscas a alguien específico."
+          )
+
         import urllib.parse
 
-        for idx, row in df_pendientes.iterrows():
+        for idx, row in df_filtrado_wpp.iterrows():
           nom = row.get(nombre_col, "Sin Nombre")
           ape = row.get(apellido_col, "")
           cedula = row.get(doc_col, "S/N")
@@ -296,14 +329,12 @@ if uploaded_file is not None:
               str(row.get(telefono_col, "")).strip() if telefono_col else ""
           )
 
-          # Mensaje armado con Mesa, Orden y Local
           mensaje = (
               f"Hola {nom} {ape} (Cédula: {cedula}). Te recordamos pasar a"
               f" votar (Corte: {corte_seleccionado}). Datos de votación ->"
               f" Local: {local} | Mesa: {mesa} | Orden: {orden}."
           )
 
-          # Definir a dónde va el enlace de WhatsApp (si tiene cel del votante, va a él; sino, a tu número con la info)
           telefono_limpio = (
               telefono.replace(".0", "")
               .replace(" ", "")
@@ -320,7 +351,7 @@ if uploaded_file is not None:
                 f"{urllib.parse.quote(mensaje)}"
             )
             etiqueta_btn = f"💬 Enviar a Elector ({telefono})"
-            color_btn = "#25D366"  # Verde WhatsApp
+            color_btn = "#25D366"
           else:
             mi_num_limpio = (
                 mi_numero_contacto.replace("+", "").replace(" ", "").strip()
@@ -330,7 +361,7 @@ if uploaded_file is not None:
                 f"{urllib.parse.quote('REPORTE PENDIENTE: ' + mensaje)}"
             )
             etiqueta_btn = "📤 Enviar a Mi WhatsApp (Sin cel del elector)"
-            color_btn = "#007BFF"  # Azul
+            color_btn = "#007BFF"
 
           with st.container(border=True):
             col_info1, col_info2, col_btn = st.columns([3, 3, 2])
@@ -411,7 +442,8 @@ if uploaded_file is not None:
       busqueda_corr = st.text_input(
           "Buscar por Cédula o Documento para corregir:",
           placeholder="Ej: 4610728",
-          key="input_cedula_correccion",
+          key="busqueda_cedula_t4",
+          autocomplete="off",
       )
 
       if busqueda_corr:
@@ -461,7 +493,7 @@ if uploaded_file is not None:
                 if estado_actual:
                   if st.button(
                       "🔄 Cambiar a Pendiente (Borrar Voto)",
-                      key=f"corr_pend_{idx}",
+                      key=f"btn_corr_pend_{idx}",
                       type="secondary",
                   ):
                     st.session_state.df_estado.loc[idx, "Estado_Voto"] = False
@@ -472,7 +504,7 @@ if uploaded_file is not None:
                 else:
                   if st.button(
                       "🔄 Cambiar a Ya Votó",
-                      key=f"corr_voto_{idx}",
+                      key=f"btn_corr_voto_{idx}",
                       type="primary",
                   ):
                     st.session_state.df_estado.loc[idx, "Estado_Voto"] = True
