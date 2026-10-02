@@ -11,9 +11,8 @@ st.set_page_config(
 
 st.title("🗳️ Centro de Control Rápido y Mensajería Electoral")
 st.markdown(
-    "Sistema optimizado para tu planilla: Control en tiempo real, semáforo de"
-    " dirigentes, rescate y envíos de WhatsApp por cortes horarios (9h, 11h,"
-    " 13h, 14h, 15h, 16h)."
+    "Sistema optimizado para tu planilla: Control en tiempo real, semáforo y"
+    " pantalla de corrección y auditoría individual."
 )
 
 # 1. Subir archivo Excel
@@ -41,18 +40,28 @@ if uploaded_file is not None:
 
   df_original = load_data(uploaded_file)
 
-  # Inicializar el estado de los votos en session_state para evitar conflictos de tipos
+  # Inicializar el estado de los votos en session_state con tipos seguros
   if "df_estado" not in st.session_state:
     df_estado = df_original.copy()
     if "Estado_Voto" not in df_estado.columns:
       if "VOTO" in df_estado.columns:
-        df_estado["Estado_Voto"] = df_estado["VOTO"].apply(
-            lambda x: True
-            if str(x).strip().upper() in ["S", "SI", "1", "TRUE", "X"]
-            else False
+        df_estado["Estado_Voto"] = (
+            df_estado["VOTO"]
+            .apply(
+                lambda x: True
+                if str(x).strip().upper() in ["S", "SI", "1", "TRUE", "X"]
+                else False
+            )
+            .astype(bool)
         )
       else:
         df_estado["Estado_Voto"] = False
+    else:
+      df_estado["Estado_Voto"] = df_estado["Estado_Voto"].astype(bool)
+
+    if "VOTO" in df_estado.columns:
+      df_estado["VOTO"] = df_estado["VOTO"].astype(object)
+
     st.session_state.df_estado = df_estado
 
   df = st.session_state.df_estado
@@ -87,6 +96,27 @@ if uploaded_file is not None:
         "❌ No se encontró la columna 'Documento' o 'Cédula' en tu Excel."
     )
   else:
+    # --- BARRA LATERAL / CONTROLES DE EMERGENCIA (RESET TOTAL) ---
+    with st.sidebar:
+      st.header("⚙️ Opciones y Herramientas")
+      st.markdown("---")
+      st.warning(
+          "⚠️ **Zona de Peligro:** Si necesitas reiniciar absolutamente"
+          " **todos** los votos y empezar desde cero:"
+      )
+      confirmar_reset = st.checkbox("Confirmar reseteo total")
+      if st.button("🔄 Reiniciar Todos los Votos", type="primary"):
+        if confirmar_reset:
+          df_reset = df_original.copy()
+          df_reset["Estado_Voto"] = False
+          if "VOTO" in df_reset.columns:
+            df_reset["VOTO"] = ""
+          st.session_state.df_estado = df_reset
+          st.success("¡Se han borrado todos los votos registrados!")
+          st.rerun()
+        else:
+          st.error("Debes marcar la casilla de confirmación.")
+
     # --- 2. ESTADÍSTICAS EN VIVO ---
     st.markdown("---")
 
@@ -97,7 +127,6 @@ if uploaded_file is not None:
         (total_votaron / total_padron) * 100 if total_padron > 0 else 0
     )
 
-    # Cálculo exclusivo para los que ya votaron Y tienen dirigente asignado
     if dirigente_col:
       votaron_con_dirigente = int(
           df[
@@ -110,14 +139,12 @@ if uploaded_file is not None:
     else:
       votaron_con_dirigente = 0
 
-    # Primera fila de métricas
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Padrón Total", f"{total_padron:,}")
     col2.metric("Ya Votaron (General)", f"{total_votaron:,}", delta=f"{porcentaje:.1f}%")
     col3.metric("Faltantes", f"{faltantes:,}")
     col4.metric("Participación General", f"{porcentaje:.1f}%")
 
-    # Segunda fila para la estadística específica de dirigente
     col_a, _ = st.columns([2, 2])
     with col_a:
       st.metric(
@@ -127,11 +154,12 @@ if uploaded_file is not None:
 
     st.markdown("---")
 
-    # Pestañas principales de navegación
-    tab_consulta, tab_cortes, tab_dirigentes = st.tabs([
+    # Pestañas principales de navegación (Con la nueva pestaña de corrección añadida)
+    tab_consulta, tab_cortes, tab_dirigentes, tab_correccion = st.tabs([
         "🔍 Consulta Rápida por Cédula",
         "📱 Cortes Horarios y Envío WhatsApp",
         "📊 Rendimiento y Semáforo",
+        "✏️ Corrección y Auditoría",
     ])
 
     # --- PESTAÑA 1: CONSULTA RÁPIDA ---
@@ -149,7 +177,7 @@ if uploaded_file is not None:
 
         if len(resultado) == 0:
           st.warning(
-              f"⚠️ No se encontró ningún elector con el documento"
+              f"⚠️️ No se encontró ningún elector con el documento"
               f" '{busqueda_limpia}'."
           )
         else:
@@ -167,12 +195,10 @@ if uploaded_file is not None:
 
             with st.container(border=True):
               cols = st.columns([2, 2, 2, 2])
-
               with cols[0]:
                 st.markdown(f"**Documento:** `{row[doc_col]}`")
                 if nom_completo:
                   st.markdown(f"**Nombre:** {nom_completo}")
-
               with cols[1]:
                 if mesa_col:
                   st.markdown(f"🏛️ **Mesa:** {row[mesa_col]}")
@@ -180,13 +206,11 @@ if uploaded_file is not None:
                   st.markdown(f"🔢 **Orden:** {row[orden_col]}")
                 if dirigente_col:
                   st.markdown(f"👤 **Dirigente:** {row[dirigente_col]}")
-
               with cols[2]:
                 if estado_actual:
                   st.markdown("### 🟢 YA VOTÓ")
                 else:
                   st.markdown("### 🔴 PENDIENTE")
-
               with cols[3]:
                 if not estado_actual:
                   if st.button(
@@ -194,27 +218,22 @@ if uploaded_file is not None:
                       key=f"btn_voto_{idx}",
                       type="primary",
                   ):
-                    st.session_state.df_estado.at[idx, "Estado_Voto"] = True
+                    st.session_state.df_estado.loc[idx, "Estado_Voto"] = True
                     if "VOTO" in st.session_state.df_estado.columns:
-                      st.session_state.df_estado.at[idx, "VOTO"] = "S"
+                      st.session_state.df_estado.loc[idx, "VOTO"] = "S"
                     st.rerun()
                 else:
                   if st.button(
                       "↩️ Desmarcar (Error)", key=f"btn_desvoto_{idx}"
                   ):
-                    st.session_state.df_estado.at[idx, "Estado_Voto"] = False
+                    st.session_state.df_estado.loc[idx, "Estado_Voto"] = False
                     if "VOTO" in st.session_state.df_estado.columns:
-                      st.session_state.df_estado.at[idx, "VOTO"] = ""
+                      st.session_state.df_estado.loc[idx, "VOTO"] = ""
                     st.rerun()
 
     # --- PESTAÑA 2: CORTES HORARIOS Y ENVÍO WHATSAPP ---
     with tab_cortes:
       st.subheader("⏰ Cortes Horarios para Operativo de Mensajería")
-      st.markdown(
-          "Selecciona el corte horario actual para filtrar a los electores"
-          " pendientes y disparar mensajes recordatorios desde tu celular."
-      )
-
       corte_seleccionado = st.selectbox(
           "Seleccionar Corte Horario:",
           ["09:00 AM", "11:00 AM", "13:00 PM", "14:00 PM", "15:00 PM", "16:00 PM"],
@@ -242,11 +261,6 @@ if uploaded_file is not None:
       )
 
       if len(df_pendientes) > 0 and telefono_col:
-        st.markdown(
-            "#### Listado interactivo con enlace directo de WhatsApp para cada"
-            " elector pendiente:"
-        )
-
         for idx, row in df_pendientes.head(50).iterrows():
           telefono = str(row.get(telefono_col, "")).strip()
           nom = row.get(nombre_col, "")
@@ -254,11 +268,9 @@ if uploaded_file is not None:
           mesa = row.get(mesa_col, "S/N")
           orden = row.get(orden_col, "S/N")
           dirigente = row.get(dirigente_col, "S/N")
-
           telefono_limpio = (
               telefono.replace(".0", "").replace(" ", "").replace("+", "")
           )
-
           mensaje = (
               f"¡Hola {nom}! Te saludamos desde el comando. Vemos que aún"
               f" no pudiste pasar a votar en este corte de las"
@@ -267,8 +279,10 @@ if uploaded_file is not None:
           )
           import urllib.parse
 
-          mensaje_encoded = urllib.parse.quote(mensaje)
-          whatsapp_url = f"https://wa.me/{telefono_limpio}?text={mensaje_encoded}"
+          whatsapp_url = (
+              f"https://wa.me/{telefono_limpio}?text="
+              f"{urllib.parse.quote(mensaje)}"
+          )
 
           col_a, col_b, col_c = st.columns([3, 2, 2])
           with col_a:
@@ -283,18 +297,6 @@ if uploaded_file is not None:
                 " Enviar WhatsApp</button></a>",
                 unsafe_allow_html=True,
             )
-        if len(df_pendientes) > 50:
-          st.caption(
-              "Mostrando los primeros 50 pendientes para optimizar la velocidad"
-              " de visualización."
-          )
-      elif not telefono_col:
-        st.warning(
-            "No se detectó una columna de Teléfono o Celular en tu planilla"
-            " para habilitar los enlaces de WhatsApp."
-        )
-      else:
-        st.success("🎉 ¡Excelente! No hay electores pendientes en este filtro.")
 
     # --- PESTAÑA 3: RENDIMIENTO Y SEMÁFORO ---
     with tab_dirigentes:
@@ -339,7 +341,90 @@ if uploaded_file is not None:
       else:
         st.warning("No se detectó una columna de Dirigente.")
 
-    # --- 4. DESCARGA DEL EXCEL EJECUTIVO CON MULTI-PESTAÑAS ---
+    # --- PESTAÑA 4: CORRECCIÓN Y AUDITORÍA INDIVIDUAL ---
+    with tab_correccion:
+      st.subheader("✏️ Pantalla de Corrección y Auditoría por Cédula")
+      st.markdown(
+          "Utiliza este buscador para localizar rápidamente a una persona, ver"
+          " si se registró su voto por error y **cambiar su condición de forma"
+          " manual** (marcar como pendiente o como votó)."
+      )
+
+      busqueda_corr = st.text_input(
+          "Buscar por Cédula o Documento para corregir:",
+          placeholder="Ej: 4610728",
+          key="input_cedula_correccion",
+      )
+
+      if busqueda_corr:
+        busqueda_corr_limpia = busqueda_corr.strip()
+        resultado_corr = df[
+            df[doc_col].str.contains(busqueda_corr_limpia, na=False)
+        ]
+
+        if len(resultado_corr) == 0:
+          st.warning(
+              f"⚠️ No se encontró ningún registro con el documento"
+              f" '{busqueda_corr_limpia}'."
+          )
+        else:
+          st.success(
+              f"✅ ¡Elector encontrado! ({len(resultado_corr)} coincidencia(s))"
+          )
+
+          for idx, row in resultado_corr.iterrows():
+            estado_actual = row["Estado_Voto"]
+            nom_completo = (
+                f"{row.get(nombre_col, '')} {row.get(apellido_col, '')}"
+                if nombre_col and apellido_col
+                else ""
+            )
+
+            with st.container(border=True):
+              cols = st.columns([2, 2, 2, 2])
+              with cols[0]:
+                st.markdown(f"**Documento:** `{row[doc_col]}`")
+                if nom_completo:
+                  st.markdown(f"**Nombre:** {nom_completo}")
+              with cols[1]:
+                if mesa_col:
+                  st.markdown(f"🏛️ **Mesa:** {row[mesa_col]}")
+                if orden_col:
+                  st.markdown(f"🔢 **Orden:** {row[orden_col]}")
+                if dirigente_col:
+                  st.markdown(f"👤 **Dirigente:** {row[dirigente_col]}")
+              with cols[2]:
+                if estado_actual:
+                  st.markdown("### 🟢 Estado: YA VOTÓ")
+                else:
+                  st.markdown("### 🔴 Estado: PENDIENTE")
+              with cols[3]:
+                st.markdown("**Modificar Condición:**")
+                # Botón condicional para cambiar el estado de manera inversa
+                if estado_actual:
+                  if st.button(
+                      "🔄 Cambiar a Pendiente (Borrar Voto)",
+                      key=f"corr_pend_{idx}",
+                      type="secondary",
+                  ):
+                    st.session_state.df_estado.loc[idx, "Estado_Voto"] = False
+                    if "VOTO" in st.session_state.df_estado.columns:
+                      st.session_state.df_estado.loc[idx, "VOTO"] = ""
+                    st.success("¡Se ha revertido el voto a pendiente!")
+                    st.rerun()
+                else:
+                  if st.button(
+                      "🔄 Cambiar a Ya Votó",
+                      key=f"corr_voto_{idx}",
+                      type="primary",
+                  ):
+                    st.session_state.df_estado.loc[idx, "Estado_Voto"] = True
+                    if "VOTO" in st.session_state.df_estado.columns:
+                      st.session_state.df_estado.loc[idx, "VOTO"] = "S"
+                    st.success("¡Se ha marcado el voto correctamente!")
+                    st.rerun()
+
+    # --- 5. DESCARGA DEL EXCEL EJECUTIVO CON MULTI-PESTAÑAS ---
     st.markdown("---")
     st.subheader("📥 Generar Reporte Final y Descargar Excel Ejecutivo")
 
@@ -348,7 +433,6 @@ if uploaded_file is not None:
       output = BytesIO()
       with pd.ExcelWriter(output, engine="openpyxl") as writer:
         dataframe.to_excel(writer, index=False, sheet_name="Padron_Actualizado")
-
         if d_col:
           resumen_dir = (
               dataframe.groupby(d_col)
@@ -383,12 +467,10 @@ if uploaded_file is not None:
             "Valor": [tot_padron, tot_votos, tot_falt, f"{pct_part:.2f}%"],
         })
         dashboard_data.to_excel(writer, index=False, sheet_name="Dashboard")
-
       return output.getvalue()
 
 
     excel_bytes = generar_excel_ejecutivo(df, dirigente_col, mesa_col)
-
     st.download_button(
         label=(
             "📥 Descargar Reporte Ejecutivo Completo (Excel con Múltiples"
