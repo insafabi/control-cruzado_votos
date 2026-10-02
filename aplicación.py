@@ -66,7 +66,7 @@ if uploaded_file is not None:
 
   df = st.session_state.df_estado
 
-  # Detectar columnas clave de tu planilla
+  # Detectar columnas clave de tu planilla de forma inteligente
   doc_col = next(
       (
           c
@@ -86,7 +86,20 @@ if uploaded_file is not None:
       (
           c
           for c in df.columns
-          if "telefono" in c.lower() or "celular" in c.lower()
+          if "telefono" in c.lower()
+          or "celular" in c.lower()
+          or "tel" in c.lower()
+      ),
+      None,
+  )
+  local_col = next(
+      (
+          c
+          for c in df.columns
+          if "local" in c.lower()
+          or "institucion" in c.lower()
+          or "escuela" in c.lower()
+          or "colegio" in c.lower()
       ),
       None,
   )
@@ -154,7 +167,7 @@ if uploaded_file is not None:
 
     st.markdown("---")
 
-    # Pestañas principales de navegación (Con la nueva pestaña de corrección añadida)
+    # Pestañas principales de navegación
     tab_consulta, tab_cortes, tab_dirigentes, tab_correccion = st.tabs([
         "🔍 Consulta Rápida por Cédula",
         "📱 Cortes Horarios y Envío WhatsApp",
@@ -177,7 +190,7 @@ if uploaded_file is not None:
 
         if len(resultado) == 0:
           st.warning(
-              f"⚠️️ No se encontró ningún elector con el documento"
+              f"⚠ No se encontró ningún elector con el documento"
               f" '{busqueda_limpia}'."
           )
         else:
@@ -260,43 +273,88 @@ if uploaded_file is not None:
           f" **{len(df_pendientes)} personas**"
       )
 
-      if len(df_pendientes) > 0 and telefono_col:
-        for idx, row in df_pendientes.head(50).iterrows():
-          telefono = str(row.get(telefono_col, "")).strip()
-          nom = row.get(nombre_col, "")
+      # Configuración de tu número personal para enlaces directos si no hay teléfono del votante
+      mi_numero_contacto = st.text_input(
+          "Tu número de celular (para recibir/coordinar avisos en WhatsApp si"
+          " el elector no tiene número cargado):",
+          value="595981000000",
+      )
+
+      if len(df_pendientes) > 0:
+        st.markdown("### Listado de Electores Pendientes y Acciones:")
+        import urllib.parse
+
+        for idx, row in df_pendientes.iterrows():
+          nom = row.get(nombre_col, "Sin Nombre")
           ape = row.get(apellido_col, "")
+          cedula = row.get(doc_col, "S/N")
           mesa = row.get(mesa_col, "S/N")
           orden = row.get(orden_col, "S/N")
-          dirigente = row.get(dirigente_col, "S/N")
-          telefono_limpio = (
-              telefono.replace(".0", "").replace(" ", "").replace("+", "")
+          local = row.get(local_col, "S/N") if local_col else "S/N"
+          dirigente = row.get(dirigente_col, "S/N") if dirigente_col else "S/N"
+          telefono = (
+              str(row.get(telefono_col, "")).strip() if telefono_col else ""
           )
+
+          # Mensaje armado con Mesa, Orden y Local
           mensaje = (
-              f"¡Hola {nom}! Te saludamos desde el comando. Vemos que aún"
-              f" no pudiste pasar a votar en este corte de las"
-              f" {corte_seleccionado}. Tu mesa es {mesa} (Orden {orden})."
-              f" ¡Contamos con tu presencia!"
-          )
-          import urllib.parse
-
-          whatsapp_url = (
-              f"https://wa.me/{telefono_limpio}?text="
-              f"{urllib.parse.quote(mensaje)}"
+              f"Hola {nom} {ape} (Cédula: {cedula}). Te recordamos pasar a"
+              f" votar (Corte: {corte_seleccionado}). Datos de votación ->"
+              f" Local: {local} | Mesa: {mesa} | Orden: {orden}."
           )
 
-          col_a, col_b, col_c = st.columns([3, 2, 2])
-          with col_a:
-            st.text(f"{nom} {ape} (Tel: {telefono})")
-          with col_b:
-            st.text(f"Mesa: {mesa} | Dir: {dirigente}")
-          with col_c:
-            st.markdown(
-                f'<a href="{whatsapp_url}" target="_blank"><button'
-                ' style="background-color:#25D366; color:white; border:none;'
-                ' padding:8px 12px; border-radius:5px; cursor:pointer; font-weight:bold;">💬'
-                " Enviar WhatsApp</button></a>",
-                unsafe_allow_html=True,
+          # Definir a dónde va el enlace de WhatsApp (si tiene cel del votante, va a él; sino, a tu número con la info)
+          telefono_limpio = (
+              telefono.replace(".0", "")
+              .replace(" ", "")
+              .replace("+", "")
+              .replace("-", "")
+          )
+          if (
+              telefono_limpio
+              and telefono_limpio.lower() != "nan"
+              and len(telefono_limpio) > 6
+          ):
+            whatsapp_url = (
+                f"https://wa.me/{telefono_limpio}?text="
+                f"{urllib.parse.quote(mensaje)}"
             )
+            etiqueta_btn = f"💬 Enviar a Elector ({telefono})"
+            color_btn = "#25D366"  # Verde WhatsApp
+          else:
+            mi_num_limpio = (
+                mi_numero_contacto.replace("+", "").replace(" ", "").strip()
+            )
+            whatsapp_url = (
+                f"https://wa.me/{mi_num_limpio}?text="
+                f"{urllib.parse.quote('REPORTE PENDIENTE: ' + mensaje)}"
+            )
+            etiqueta_btn = "📤 Enviar a Mi WhatsApp (Sin cel del elector)"
+            color_btn = "#007BFF"  # Azul
+
+          with st.container(border=True):
+            col_info1, col_info2, col_btn = st.columns([3, 3, 2])
+            with col_info1:
+              st.markdown(
+                  f"**👤 {nom} {ape}**<br>Cédula: `{cedula}`<br>Dirigente:"
+                  f" `{dirigente}`",
+                  unsafe_allow_html=True,
+              )
+            with col_info2:
+              st.markdown(
+                  f"🏛️ **Local:** {local}<br>🔢 **Mesa:** {mesa} | **Orden:**"
+                  f" {orden}",
+                  unsafe_allow_html=True,
+              )
+            with col_btn:
+              st.markdown("<br>", unsafe_allow_html=True)
+              st.markdown(
+                  f'<a href="{whatsapp_url}" target="_blank"><button'
+                  f' style="background-color:{color_btn}; color:white;'
+                  ' border:none; padding:10px 14px; border-radius:5px;'
+                  f' cursor:pointer; font-weight:bold; width:100%;">{etiqueta_btn}</button></a>',
+                  unsafe_allow_html=True,
+              )
 
     # --- PESTAÑA 3: RENDIMIENTO Y SEMÁFORO ---
     with tab_dirigentes:
@@ -400,7 +458,6 @@ if uploaded_file is not None:
                   st.markdown("### 🔴 Estado: PENDIENTE")
               with cols[3]:
                 st.markdown("**Modificar Condición:**")
-                # Botón condicional para cambiar el estado de manera inversa
                 if estado_actual:
                   if st.button(
                       "🔄 Cambiar a Pendiente (Borrar Voto)",
