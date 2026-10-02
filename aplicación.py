@@ -32,9 +32,7 @@ if uploaded_file is not None:
     df.columns = df.columns.str.strip()
 
     # Mapear o verificar columnas basándonos en tu estructura exacta
-    # Esperadas: Documento, Dirigente, Local, Apellidos, Nombres, VOTO, Partido, Mesa, Orden, Telefono
     if "Estado_Voto" not in df.columns:
-      # Si la columna VOTO original tiene 'S' o valores, podemos inicializar el estado
       if "VOTO" in df.columns:
         df["Estado_Voto"] = df["VOTO"].apply(
             lambda x: True
@@ -44,7 +42,6 @@ if uploaded_file is not None:
       else:
         df["Estado_Voto"] = False
 
-    # Limpiar columna de cédula/documento a texto puro
     doc_col = next(
         (c for c in df.columns if "documento" in c.lower() or "cedula" in c.lower()),
         None,
@@ -89,7 +86,6 @@ if uploaded_file is not None:
   else:
     # --- 2. ESTADÍSTICAS EN VIVO (CONTROL PARALELO) ---
     st.markdown("---")
-    col1, col2, col3, col4 = st.columns(4)
 
     total_padron = len(df)
     total_votaron = int(df["Estado_Voto"].sum())
@@ -98,10 +94,37 @@ if uploaded_file is not None:
         (total_votaron / total_padron) * 100 if total_padron > 0 else 0
     )
 
+    # Cálculo exclusivo para los que ya votaron Y tienen dirigente asignado
+    if dirigente_col:
+      # Filtrar filas donde ya votaron (True) y la columna dirigente no está vacía / NaN
+      votaron_con_dirigente = int(
+          df[
+              (df["Estado_Voto"] == True)
+              & (df[dirigente_col].notna())
+              & (df[dirigente_col].astype(str).str.strip() != "")
+              & (df[dirigente_col].astype(str).str.lower() != "nan")
+          ].shape[0]
+      )
+    else:
+      votaron_con_dirigente = 0
+
+    # Primera fila de métricas
+    col1, col2, col3, col4 = st.columns(4)
     col1.metric("Padrón Total", f"{total_padron:,}")
-    col2.metric("Ya Votaron", f"{total_votaron:,}", delta=f"{porcentaje:.1f}%")
+    col2.metric("Ya Votaron (General)", f"{total_votaron:,}", delta=f"{porcentaje:.1f}%")
     col3.metric("Faltantes", f"{faltantes:,}")
     col4.metric("Participación General", f"{porcentaje:.1f}%")
+
+    # Segunda fila para la estadística específica solicitada
+    col_a, col_b = st.columns(
+        [2, 2]
+    )  # Espaciado para destacar la métrica de dirigente
+    with col_a:
+      st.metric(
+          "🗳️ Ya Votaron (Con Dirigente Identificado)",
+          f"{votaron_con_dirigente:,}",
+      )
+
     st.markdown("---")
 
     # Pestañas principales de navegación
@@ -190,13 +213,11 @@ if uploaded_file is not None:
           " pendientes y disparar mensajes recordatorios desde tu celular."
       )
 
-      # Selector de cortes horarios solicitados
       corte_seleccionado = st.selectbox(
           "Seleccionar Corte Horario:",
           ["09:00 AM", "11:00 AM", "13:00 PM", "14:00 PM", "15:00 PM", "16:00 PM"],
       )
 
-      # Filtro opcional por dirigente dentro del corte
       if dirigente_col:
         dirigentes_lista = ["Todos los Dirigentes"] + list(
             df[dirigente_col].dropna().unique()
@@ -207,7 +228,6 @@ if uploaded_file is not None:
       else:
         dirigente_filtro = "Todos los Dirigentes"
 
-      # Filtrar solo los que NO han votado
       df_pendientes = df[df["Estado_Voto"] == False].copy()
       if dirigente_filtro != "Todos los Dirigentes" and dirigente_col:
         df_pendientes = df_pendientes[
@@ -225,7 +245,7 @@ if uploaded_file is not None:
             " elector pendiente:"
         )
 
-        for idx, row in df_pendientes.head(50).iterrows():  # Muestra los primeros para agilizar
+        for idx, row in df_pendientes.head(50).iterrows():
           telefono = str(row.get(telefono_col, "")).strip()
           nom = row.get(nombre_col, "")
           ape = row.get(apellido_col, "")
@@ -233,12 +253,10 @@ if uploaded_file is not None:
           orden = row.get(orden_col, "S/N")
           dirigente = row.get(dirigente_col, "S/N")
 
-          # Limpiar teléfono para link de whatsapp (ej: quitar .0, espacios)
           telefono_limpio = (
               telefono.replace(".0", "").replace(" ", "").replace("+", "")
           )
 
-          # Mensaje personalizado para el corte
           mensaje = (
               f"¡Hola {nom}! Te saludamos desde el comando. Vemos que aún"
               f" no pudiste pasar a votar en este corte de las"
