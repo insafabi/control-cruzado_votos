@@ -27,20 +27,7 @@ if uploaded_file is not None:
   @st.cache_data
   def load_data(file):
     df = pd.read_excel(file)
-
-    # Normalizar nombres de columnas por si tienen espacios extras
     df.columns = df.columns.str.strip()
-
-    # Mapear o verificar columnas basándonos en tu estructura exacta
-    if "Estado_Voto" not in df.columns:
-      if "VOTO" in df.columns:
-        df["Estado_Voto"] = df["VOTO"].apply(
-            lambda x: True
-            if str(x).strip().upper() in ["S", "SI", "1", "TRUE", "X"]
-            else False
-        )
-      else:
-        df["Estado_Voto"] = False
 
     doc_col = next(
         (c for c in df.columns if "documento" in c.lower() or "cedula" in c.lower()),
@@ -52,7 +39,23 @@ if uploaded_file is not None:
     return df
 
 
-  df = load_data(uploaded_file)
+  df_original = load_data(uploaded_file)
+
+  # Inicializar el estado de los votos en session_state para evitar conflictos de tipos
+  if "df_estado" not in st.session_state:
+    df_estado = df_original.copy()
+    if "Estado_Voto" not in df_estado.columns:
+      if "VOTO" in df_estado.columns:
+        df_estado["Estado_Voto"] = df_estado["VOTO"].apply(
+            lambda x: True
+            if str(x).strip().upper() in ["S", "SI", "1", "TRUE", "X"]
+            else False
+        )
+      else:
+        df_estado["Estado_Voto"] = False
+    st.session_state.df_estado = df_estado
+
+  df = st.session_state.df_estado
 
   # Detectar columnas clave de tu planilla
   doc_col = next(
@@ -84,7 +87,7 @@ if uploaded_file is not None:
         "❌ No se encontró la columna 'Documento' o 'Cédula' en tu Excel."
     )
   else:
-    # --- 2. ESTADÍSTICAS EN VIVO (CONTROL PARALELO) ---
+    # --- 2. ESTADÍSTICAS EN VIVO ---
     st.markdown("---")
 
     total_padron = len(df)
@@ -96,7 +99,6 @@ if uploaded_file is not None:
 
     # Cálculo exclusivo para los que ya votaron Y tienen dirigente asignado
     if dirigente_col:
-      # Filtrar filas donde ya votaron (True) y la columna dirigente no está vacía / NaN
       votaron_con_dirigente = int(
           df[
               (df["Estado_Voto"] == True)
@@ -115,10 +117,8 @@ if uploaded_file is not None:
     col3.metric("Faltantes", f"{faltantes:,}")
     col4.metric("Participación General", f"{porcentaje:.1f}%")
 
-    # Segunda fila para la estadística específica solicitada
-    col_a, col_b = st.columns(
-        [2, 2]
-    )  # Espaciado para destacar la métrica de dirigente
+    # Segunda fila para la estadística específica de dirigente
+    col_a, _ = st.columns([2, 2])
     with col_a:
       st.metric(
           "🗳️ Ya Votaron (Con Dirigente Identificado)",
@@ -194,15 +194,17 @@ if uploaded_file is not None:
                       key=f"btn_voto_{idx}",
                       type="primary",
                   ):
-                    df.at[idx, "Estado_Voto"] = True
-                    df.at[idx, "VOTO"] = "S"
+                    st.session_state.df_estado.at[idx, "Estado_Voto"] = True
+                    if "VOTO" in st.session_state.df_estado.columns:
+                      st.session_state.df_estado.at[idx, "VOTO"] = "S"
                     st.rerun()
                 else:
                   if st.button(
                       "↩️ Desmarcar (Error)", key=f"btn_desvoto_{idx}"
                   ):
-                    df.at[idx, "Estado_Voto"] = False
-                    df.at[idx, "VOTO"] = ""
+                    st.session_state.df_estado.at[idx, "Estado_Voto"] = False
+                    if "VOTO" in st.session_state.df_estado.columns:
+                      st.session_state.df_estado.at[idx, "VOTO"] = ""
                     st.rerun()
 
     # --- PESTAÑA 2: CORTES HORARIOS Y ENVÍO WHATSAPP ---
