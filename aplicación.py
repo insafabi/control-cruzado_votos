@@ -3,29 +3,59 @@ from io import BytesIO
 import openpyxl
 import pandas as pd
 import streamlit as st
+from sqlalchemy import create_engine, text
 
 # Configuración de la página
 st.set_page_config(
     page_title="Control Electoral - Seccional", page_icon="🗳️", layout="wide"
 )
 
-st.title("🗳️ Centro de Control Rápido y Mensajería Electoral")
+# --- CONFIGURACIÓN DE PERSISTENCIA (BASE DE DATOS SQLITE) ---
+DB_NAME = "control_electoral_persistente.db"
+engine = create_engine(f"sqlite:///{DB_NAME}", echo=False)
+TABLE_NAME = "padron_votantes"
+
+st.title("🗳️️ Centro de Control Rápido y Mensajería Electoral")
 st.markdown(
-    "Sistema optimizado para tu planilla masiva: Control en tiempo real,"
-    " semáforo y pantalla de corrección y auditoría individual."
+    "Sistema optimizado para control en tiempo real, semáforo y pantalla de"
+    " auditoría (Optimizado para uso en Celular via Web)."
 )
 
-# 1. Subir archivo Excel
+# Función para cargar datos persistidos si ya existen previamente en el disco
+@st.cache_data
+def verificar_tabla_existente():
+  try:
+    with engine.connect() as conn:
+      query = f"SELECT name FROM sqlite_master WHERE type='table' AND name='{TABLE_NAME}';"
+      res = conn.execute(text(query)).fetchone()
+      if res:
+        return pd.read_sql(TABLE_NAME, con=engine)
+  except Exception:
+    pass
+  return None
+
+
+# Inicializar el session_state buscando si hay una BD guardada previamente
+if "df_estado" not in st.session_state:
+  df_persitido = verificar_tabla_existente()
+  if df_persitido is not None and not df_persitido.empty:
+    st.session_state.df_estado = df_persitido
+    st.session_state.file_name = "Cargado desde Base de Datos Local"
+  else:
+    st.session_state.df_estado = None
+    st.session_state.file_name = None
+
+# 1. Subir archivo Excel (Solo necesario la primera vez o para actualizar padrón)
 uploaded_file = st.file_uploader(
-    "Cargar tu planilla Excel de votantes (.xlsx)", type=["xlsx", "xls"]
+    "Cargar tu planilla Excel de votantes (.xlsx) - (Si ya cargaste antes, los"
+    " datos previos están guardados)",
+    type=["xlsx", "xls"],
 )
 
 if uploaded_file is not None:
-
-  # Inicializar el estado de los datos y sesión de forma segura
   if (
-      "file_name" not in st.session_state
-      or st.session_state.file_name != uploaded_file.name
+      "file_name_subido" not in st.session_state
+      or st.session_state.file_name_subido != uploaded_file.name
   ):
     df_raw = pd.read_excel(uploaded_file)
     df_raw.columns = df_raw.columns.str.strip()
@@ -62,9 +92,15 @@ if uploaded_file is not None:
     if "VOTO" in df_raw.columns:
       df_raw["VOTO"] = df_raw["VOTO"].astype(object)
 
-    st.session_state.df_estado = df_raw
-    st.session_state.file_name = uploaded_file.name
+    # Guardar en base de datos permanente
+    df_raw.to_sql(TABLE_NAME, con=engine, if_exists="replace", index=False)
 
+    st.session_state.df_estado = df_raw
+    st.session_state.file_name_subido = uploaded_file.name
+    st.success("¡Planilla cargada y respaldada en la memoria persistente!")
+
+# Verificar si tenemos un DataFrame activo para mostrar la aplicación
+if st.session_state.get("df_estado") is not None:
   df = st.session_state.df_estado
 
   # Detectar columnas clave de tu planilla de forma inteligente
@@ -110,6 +146,13 @@ if uploaded_file is not None:
         "❌ No se encontró la columna 'Documento' o 'Cédula' en tu Excel."
     )
   else:
+
+    def actualizar_bd_y_estado():
+      st.session_state.df_estado.to_sql(
+          TABLE_NAME, con=engine, if_exists="replace", index=False
+      )
+      st.cache_data.clear()
+
     # --- BARRA LATERAL / CONTROLES DE EMERGENCIA (RESET TOTAL) ---
     with st.sidebar:
       st.header("⚙️ Opciones y Herramientas")
@@ -126,6 +169,7 @@ if uploaded_file is not None:
           st.session_state.df_estado["Estado_Voto"] = False
           if "VOTO" in st.session_state.df_estado.columns:
             st.session_state.df_estado["VOTO"] = ""
+          actualizar_bd_y_estado()
           st.success("¡Se han borrado todos los votos registrados!")
           st.rerun()
         else:
@@ -238,6 +282,7 @@ if uploaded_file is not None:
                     st.session_state.df_estado.loc[idx, "Estado_Voto"] = True
                     if "VOTO" in st.session_state.df_estado.columns:
                       st.session_state.df_estado.loc[idx, "VOTO"] = "S"
+                    actualizar_bd_y_estado()
                     st.rerun()
                 else:
                   if st.button(
@@ -246,6 +291,7 @@ if uploaded_file is not None:
                     st.session_state.df_estado.loc[idx, "Estado_Voto"] = False
                     if "VOTO" in st.session_state.df_estado.columns:
                       st.session_state.df_estado.loc[idx, "VOTO"] = ""
+                    actualizar_bd_y_estado()
                     st.rerun()
 
     # --- PESTAÑA 2: CORTES HORARIOS Y ENVÍO WHATSAPP ---
@@ -303,9 +349,7 @@ if uploaded_file is not None:
         if busq_pend:
           df_filtrado_wpp = df_pendientes[
               df_pendientes.astype(str)
-              .apply(
-                  lambda x: x.str.contains(busq_pend, case=False, na=False)
-              )
+              .apply(lambda x: x.str.contains(busq_pend, case=False, na=False))
               .any(axis=1)
           ]
         else:
@@ -499,6 +543,7 @@ if uploaded_file is not None:
                     st.session_state.df_estado.loc[idx, "Estado_Voto"] = False
                     if "VOTO" in st.session_state.df_estado.columns:
                       st.session_state.df_estado.loc[idx, "VOTO"] = ""
+                    actualizar_bd_y_estado()
                     st.success("¡Se ha revertido el voto a pendiente!")
                     st.rerun()
                 else:
@@ -510,6 +555,7 @@ if uploaded_file is not None:
                     st.session_state.df_estado.loc[idx, "Estado_Voto"] = True
                     if "VOTO" in st.session_state.df_estado.columns:
                       st.session_state.df_estado.loc[idx, "VOTO"] = "S"
+                    actualizar_bd_y_estado()
                     st.success("¡Se ha marcado el voto correctamente!")
                     st.rerun()
 
@@ -571,8 +617,9 @@ if uploaded_file is not None:
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         ),
     )
-
 else:
-  st.warning(
-      "Por favor, cargue su archivo Excel de la seccional para comenzar."
+  st.info(
+      "📁 Por favor, carga tu planilla Excel inicial de la seccional para"
+      " comenzar. Una vez cargada, los votos quedarán guardados"
+      " automáticamente en la base de datos local temporal."
   )
